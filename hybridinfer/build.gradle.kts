@@ -55,9 +55,8 @@ dependencies {
 publishing {
     publications {
         register<MavenPublication>("release") {
-            groupId = "com.hybridinfer"
-            artifactId = "router"
-            version = "0.1.0"
+            // Coordinates inherited from the project so JitPack can inject
+            // group = com.github.<user> and version = <tag> at build time.
             afterEvaluate {
                 from(components["release"])
             }

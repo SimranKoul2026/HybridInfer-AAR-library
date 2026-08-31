@@ -1,0 +1,5 @@
+# JitPack build config. Gradle 8.7 + AGP 8.5 need JDK 17 (not a newer JDK).
+jdk:
+  - openjdk17
+install:
+  - ./gradlew :hybridinfer:publishToMavenLocal

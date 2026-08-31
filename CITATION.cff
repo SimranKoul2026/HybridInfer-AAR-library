@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "HybridInfer (Android AAR): reliability-aware LLM router library"
+message: "If you use this software, please cite it using this metadata."
+type: software
+authors:
+  - given-names: Simran
+    family-names: Koul
+repository-code: "https://github.com/SimranKoul2026/HybridInfer-AAR-library"
+abstract: >-
+  The HybridInfer reliability router as an Android library: runs each LLM
+  request on an on-device model first and automatically falls back to a remote
+  model when on-device inference stalls, crashes, or is predicted to fail. The
+  Kotlin twin of the Python tool, verified against the same conformance vectors.
+keywords:
+  - llm
+  - on-device
+  - android
+  - routing
+  - reliability
+  - fallback
+  - mlc-llm
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-08-31"
