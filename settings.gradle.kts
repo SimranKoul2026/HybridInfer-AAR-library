@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "HybridInfer-AAR-library"
 include(":hybridinfer")
+include(":demo")
