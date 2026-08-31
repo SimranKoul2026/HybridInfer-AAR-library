@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17: Gradle 8.7 runs on Java 8-21, and AGP 8.5 targets JDK 17.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ubuntu-latest ships the Android SDK (ANDROID_HOME set) incl. platform 34.
+      - name: Conformance test (shared vectors) + build AAR
+        run: ./gradlew :hybridinfer:test :hybridinfer:assembleRelease --no-daemon --stacktrace
+
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hybridinfer-aar
+          path: hybridinfer/build/outputs/aar/*.aar
+          if-no-files-found: error
