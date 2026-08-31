@@ -42,12 +42,13 @@ Implement `Engine` for your on-device model (MLC-LLM), use the bundled
 ```kotlin
 import com.hybridinfer.*
 
-// 1. Your on-device engine (you wrap MLC-LLM's streaming API):
+// 1. Your on-device engine wraps MLC-LLM. A complete, ready-to-adapt reference
+//    (coroutine->Sequence bridge + stall watchdog + reset) is in examples/MlcEngine.kt.
 class MlcEngine(override val model: String) : Engine {
     override val tier = "local"
     override val backend = "mlc"
     override fun stream(messages: List<Message>, timeoutS: Double, stallTimeoutS: Double?): Sequence<String> = sequence {
-        // ... stream tokens from MLCEngine; throw BackendException("stall") on a wedge, etc.
+        // ... stream tokens from MLCEngine; throw BackendException("stall") on a wedge.
     }
 }
 
