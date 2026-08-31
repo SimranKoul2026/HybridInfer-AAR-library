@@ -21,16 +21,16 @@ routing + reliability brain.
 
 ## Install
 
-Not yet published to Maven Central. Use it via a local module or JitPack:
+Available via [JitPack](https://jitpack.io/#SimranKoul2026/HybridInfer-AAR-library):
 
 ```kotlin
-// settings.gradle.kts (JitPack)
+// settings.gradle.kts
 dependencyResolutionManagement {
     repositories { maven("https://jitpack.io") }
 }
 // build.gradle.kts
 dependencies {
-    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:0.1.0")
+    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.1.0")
 }
 ```
 
@@ -95,7 +95,7 @@ Python repo's copy, and both test suites must pass it.
 - The pure-Kotlin core and `OpenAiEngine` are dependency-light (only gson) and
   JVM-unit-tested; the Android-specific `ThermalSignal` compiles under the Android
   SDK.
-- Not yet published to Maven Central; version 0.1.0.
+- Published via JitPack (`v0.1.0`); not on Maven Central.
 
 ## License
 
