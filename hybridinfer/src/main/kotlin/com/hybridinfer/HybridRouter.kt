@@ -48,13 +48,15 @@ class HybridRouter(
         messages: List<Message>,
         idempotencyKey: String? = null,
         safeToRetry: Boolean = true,
-    ): GenerationResult = controller.complete(messages, idempotencyKey, safeToRetry)
+        params: Map<String, Any?>? = null,
+    ): GenerationResult = controller.complete(messages, idempotencyKey, safeToRetry, params)
 
     fun stream(
         messages: List<Message>,
         idempotencyKey: String? = null,
         safeToRetry: Boolean = true,
-    ): Sequence<StreamChunk> = controller.stream(messages, idempotencyKey, safeToRetry)
+        params: Map<String, Any?>? = null,
+    ): Sequence<StreamChunk> = controller.stream(messages, idempotencyKey, safeToRetry, params)
 
     fun state(): String = controller.state.state.name
 

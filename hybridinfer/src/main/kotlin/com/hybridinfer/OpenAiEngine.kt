@@ -1,5 +1,6 @@
 package com.hybridinfer
 
+import com.google.gson.Gson
 import com.google.gson.JsonParser
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -25,6 +26,7 @@ class OpenAiEngine(
         messages: List<Message>,
         timeoutS: Double,
         stallTimeoutS: Double?,
+        params: Map<String, Any?>?,
     ): Sequence<String> = sequence {
         val url = URL(baseUrl.trimEnd('/') + "/chat/completions")
         val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -37,7 +39,7 @@ class OpenAiEngine(
         }
 
         try {
-            conn.outputStream.use { it.write(buildRequestJson(messages).toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { it.write(buildRequestJson(messages, params).toByteArray(Charsets.UTF_8)) }
         } catch (e: Exception) {
             throw BackendException("connection", e.message ?: "")
         }
@@ -90,30 +92,14 @@ class OpenAiEngine(
         }
     }
 
-    // Minimal, escaping-correct JSON for {model, stream:true, messages:[{role,content}]}.
-    private fun buildRequestJson(messages: List<Message>): String {
-        val sb = StringBuilder()
-        sb.append("{\"model\":").append(quote(model)).append(",\"stream\":true,\"messages\":[")
-        messages.forEachIndexed { i, m ->
-            if (i > 0) sb.append(",")
-            sb.append("{\"role\":").append(quote((m["role"] ?: "user").toString()))
-                .append(",\"content\":").append(quote((m["content"] ?: "").toString())).append("}")
-        }
-        return sb.append("]}").toString()
-    }
-
-    private fun quote(s: String): String {
-        val sb = StringBuilder("\"")
-        for (c in s) {
-            when (c) {
-                '\\' -> sb.append("\\\\")
-                '"' -> sb.append("\\\"")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                else -> if (c < ' ') sb.append("\\u%04x".format(c.code)) else sb.append(c)
-            }
-        }
-        return sb.append("\"").toString()
+    // Serialize {..caller params.., model, messages, stream:true}; the routed
+    // model/messages/stream always win over params.
+    private fun buildRequestJson(messages: List<Message>, params: Map<String, Any?>?): String {
+        val body = HashMap<String, Any?>()
+        if (params != null) body.putAll(params)
+        body["model"] = model
+        body["messages"] = messages
+        body["stream"] = true
+        return Gson().toJson(body)
     }
 }

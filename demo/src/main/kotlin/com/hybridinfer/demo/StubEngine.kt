@@ -23,6 +23,7 @@ class StubEngine(
         messages: List<Message>,
         timeoutS: Double,
         stallTimeoutS: Double?,
+        params: Map<String, Any?>?,
     ): Sequence<String> = sequence {
         fail?.let { throw BackendException(it) }
         yield(text)

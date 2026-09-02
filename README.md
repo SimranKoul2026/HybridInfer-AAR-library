@@ -21,6 +21,8 @@ routing + reliability brain.
   and it won't be replayed on fallback; pass an `idempotencyKey` to re-enable it.
 - **Distinct failure classes** (v0.2): `prefill_timeout` (no first token) vs `stall`
   (mid-stream), plus a structured routing `reason` on every result.
+- **Parameter passthrough** (v0.2.1): generation params (`temperature`, `max_tokens`,
+  `tools`, ...) passed to `complete`/`stream` are forwarded to the engines.
 - **Optional thermal signal** (`ThermalSignal`) - the input a desktop can't have.
 
 ## Install
@@ -34,7 +36,7 @@ dependencyResolutionManagement {
 }
 // build.gradle.kts
 dependencies {
-    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.2.0")
+    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.2.1")
 }
 ```
 
@@ -99,7 +101,7 @@ Python repo's copy, and both test suites must pass it.
 - The pure-Kotlin core and `OpenAiEngine` are dependency-light (only gson) and
   JVM-unit-tested; the Android-specific `ThermalSignal` compiles under the Android
   SDK.
-- Published via JitPack (`v0.2.0`); not on Maven Central.
+- Published via JitPack (`v0.2.1`); not on Maven Central.
 
 ## License
 

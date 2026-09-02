@@ -20,6 +20,7 @@ object Conformance {
             messages: List<Message>,
             timeoutS: Double,
             stallTimeoutS: Double?,
+            params: Map<String, Any?>?,
         ): Sequence<String> = emptySequence()
     }
 

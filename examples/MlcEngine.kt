@@ -76,6 +76,7 @@ class MlcEngine(
         messages: List<Message>,
         timeoutS: Double,
         stallTimeoutS: Double?,
+        params: Map<String, Any?>?,   // map temperature/max_tokens/... onto MLC's request if desired
     ): Sequence<String> = sequence {
         val queue = LinkedBlockingQueue<Item>()
         val cancelled = AtomicBoolean(false)

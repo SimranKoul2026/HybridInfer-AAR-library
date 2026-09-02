@@ -52,6 +52,7 @@ interface Engine {
         messages: List<Message>,
         timeoutS: Double,
         stallTimeoutS: Double?,
+        params: Map<String, Any?>? = null,   // OpenAI-style generation params to forward
     ): Sequence<String>
 
     fun available(): Boolean = true

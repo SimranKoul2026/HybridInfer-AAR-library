@@ -48,6 +48,7 @@ class FailureAwareController(
         messages: List<Message>,
         idempotencyKey: String? = null,
         safeToRetry: Boolean = true,
+        params: Map<String, Any?>? = null,
     ): GenerationResult {
         val bin = Complexity.complexityBin(messages, shortMaxTokens, mediumMaxTokens)
         val route = ArrayList<String>()
@@ -58,7 +59,7 @@ class FailureAwareController(
         if (prefer && local != null) {
             if (localPermitted()) {
                 health.onLocalStarted()
-                val res = runEngine(local, messages, isLocal = true)
+                val res = runEngine(local, messages, isLocal = true, params = params)
                 route.add("local")
                 health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
                 risk.update(local.backend, local.model, bin, failed = !res.ok)
@@ -81,7 +82,7 @@ class FailureAwareController(
         }
 
         if (remote != null) {
-            val res = runEngine(remote, messages, isLocal = false)
+            val res = runEngine(remote, messages, isLocal = false, params = params)
             route.add("remote")
             health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
             return res.copy(route = route.toList(), tier = "remote",
@@ -90,7 +91,7 @@ class FailureAwareController(
 
         if (local != null && !route.contains("local")) {
             health.onLocalStarted()
-            val res = runEngine(local, messages, isLocal = true)
+            val res = runEngine(local, messages, isLocal = true, params = params)
             route.add("local")
             risk.update(local.backend, local.model, bin, failed = !res.ok)
             health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
@@ -112,6 +113,7 @@ class FailureAwareController(
         messages: List<Message>,
         idempotencyKey: String? = null,
         safeToRetry: Boolean = true,
+        params: Map<String, Any?>? = null,
     ): Sequence<StreamChunk> = sequence {
         val bin = Complexity.complexityBin(messages, shortMaxTokens, mediumMaxTokens)
         val route = ArrayList<String>()
@@ -129,7 +131,7 @@ class FailureAwareController(
                 var preTokenError: String? = null
                 var midError: String? = null
                 try {
-                    for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS)) {
+                    for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS, params)) {
                         emitted += 1
                         yield(StreamChunk(delta = delta, tier = "local", model = local.model))
                     }
@@ -169,7 +171,7 @@ class FailureAwareController(
             var n = 0
             var err: String? = null
             try {
-                for (delta in remote.stream(messages, config.remoteTimeoutS, null)) {
+                for (delta in remote.stream(messages, config.remoteTimeoutS, null, params)) {
                     n += 1
                     yield(StreamChunk(delta = delta, tier = "remote", model = remote.model))
                 }
@@ -187,7 +189,7 @@ class FailureAwareController(
             var n = 0
             var err: String? = null
             try {
-                for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS)) {
+                for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS, params)) {
                     n += 1
                     yield(StreamChunk(delta = delta, tier = "local", model = local.model))
                 }
@@ -211,7 +213,9 @@ class FailureAwareController(
             meta = meta("", route, false, 0, "no_backend", idempotencyKey)))
     }
 
-    private fun runEngine(engine: Engine, messages: List<Message>, isLocal: Boolean): GenerationResult {
+    private fun runEngine(
+        engine: Engine, messages: List<Message>, isLocal: Boolean, params: Map<String, Any?>?,
+    ): GenerationResult {
         val start = System.nanoTime()
         var ttft: Double? = null
         val sb = StringBuilder()
@@ -219,7 +223,7 @@ class FailureAwareController(
         val timeout = if (isLocal) config.localTimeoutS else config.remoteTimeoutS
         val stall = if (isLocal) config.localStallTimeoutS else null
         return try {
-            for (delta in engine.stream(messages, timeout, stall)) {
+            for (delta in engine.stream(messages, timeout, stall, params)) {
                 if (ttft == null) ttft = (System.nanoTime() - start) / 1e6
                 n += 1
                 sb.append(delta)
