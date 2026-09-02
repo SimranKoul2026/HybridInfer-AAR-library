@@ -17,6 +17,10 @@ routing + reliability brain.
 - **Safety state machine** (`LOCAL_ELIGIBLE -> CAUTION -> UNSAFE -> RECOVERING -> RESTORED`)
   that pulls a wedging model out of rotation and probes it back after a cooldown.
 - **Streaming** with first-token-commit fallback.
+- **Idempotency-aware** (v0.2): mark a side-effecting request `safeToRetry = false`
+  and it won't be replayed on fallback; pass an `idempotencyKey` to re-enable it.
+- **Distinct failure classes** (v0.2): `prefill_timeout` (no first token) vs `stall`
+  (mid-stream), plus a structured routing `reason` on every result.
 - **Optional thermal signal** (`ThermalSignal`) - the input a desktop can't have.
 
 ## Install
@@ -30,7 +34,7 @@ dependencyResolutionManagement {
 }
 // build.gradle.kts
 dependencies {
-    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.1.0")
+    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.2.0")
 }
 ```
 
@@ -95,7 +99,7 @@ Python repo's copy, and both test suites must pass it.
 - The pure-Kotlin core and `OpenAiEngine` are dependency-light (only gson) and
   JVM-unit-tested; the Android-specific `ThermalSignal` compiles under the Android
   SDK.
-- Published via JitPack (`v0.1.0`); not on Maven Central.
+- Published via JitPack (`v0.2.0`); not on Maven Central.
 
 ## License
 

@@ -33,7 +33,7 @@ class RuntimeHealthMonitor(
         if (ttftMs != null) lastTtft = ttftMs
         if (!ok) {
             failures.addLast(now)
-            if (error == "timeout" || error == "stall") timeouts.addLast(now)
+            if (error == "timeout" || error == "prefill_timeout" || error == "stall") timeouts.addLast(now)
         }
         prune()
     }

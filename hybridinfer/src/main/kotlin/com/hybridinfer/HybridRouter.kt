@@ -22,19 +22,39 @@ class HybridRouter(
     riskProfilePath: String? = null,
     shortMaxTokens: Int = 128,
     mediumMaxTokens: Int = 512,
+    recoveryCooldownS: Double = 60.0,
+    recoveryBackoff: Double = 2.0,
+    recoveryCooldownMaxS: Double = 600.0,
 ) {
     val controller = FailureAwareController(
         local = local,
         remote = remote,
         config = config,
         risk = RiskProfile(riskProfilePath),
+        state = SafetyStateMachine(
+            recoveryCooldownS = recoveryCooldownS,
+            recoveryBackoff = recoveryBackoff,
+            recoveryCooldownMaxS = recoveryCooldownMaxS,
+        ),
         shortMaxTokens = shortMaxTokens,
         mediumMaxTokens = mediumMaxTokens,
     )
 
-    fun complete(messages: List<Message>): GenerationResult = controller.complete(messages)
+    /**
+     * @param safeToRetry set false for a side-effecting request that must not be
+     *   replayed on fallback; supply [idempotencyKey] to re-enable fallback.
+     */
+    fun complete(
+        messages: List<Message>,
+        idempotencyKey: String? = null,
+        safeToRetry: Boolean = true,
+    ): GenerationResult = controller.complete(messages, idempotencyKey, safeToRetry)
 
-    fun stream(messages: List<Message>): Sequence<StreamChunk> = controller.stream(messages)
+    fun stream(
+        messages: List<Message>,
+        idempotencyKey: String? = null,
+        safeToRetry: Boolean = true,
+    ): Sequence<StreamChunk> = controller.stream(messages, idempotencyKey, safeToRetry)
 
     fun state(): String = controller.state.state.name
 

@@ -18,6 +18,11 @@ data class ControllerConfig(
  * vs remote, runs local under a timeout + stall watchdog, and on any local
  * failure transparently falls back to remote. Records outcomes to self-calibrate
  * the risk profile and drive the safety state machine.
+ *
+ * Per-request idempotency (v0.2): pass `safeToRetry = false` for a side-effecting
+ * request. With no `idempotencyKey`, the controller commits to a single tier and
+ * will NOT fall back after a local failure - so a mutating op is never replayed.
+ * Supplying an idempotency key re-enables fallback.
  */
 class FailureAwareController(
     private val local: Engine?,
@@ -30,24 +35,48 @@ class FailureAwareController(
     private val mediumMaxTokens: Int = 512,
 ) {
 
-    fun complete(messages: List<Message>): GenerationResult {
+    private fun fallbackAllowed(safeToRetry: Boolean, key: String?): Boolean =
+        config.enableInRequestFallback && (safeToRetry || key != null)
+
+    private fun noFallbackReason(localErr: String): String = when {
+        remote == null -> "local_failed:$localErr"
+        !config.enableInRequestFallback -> "fallback_disabled:$localErr"
+        else -> "no_fallback_unsafe:$localErr"
+    }
+
+    fun complete(
+        messages: List<Message>,
+        idempotencyKey: String? = null,
+        safeToRetry: Boolean = true,
+    ): GenerationResult {
         val bin = Complexity.complexityBin(messages, shortMaxTokens, mediumMaxTokens)
         val route = ArrayList<String>()
+        val allowFallback = fallbackAllowed(safeToRetry, idempotencyKey)
+        val (prefer, reason0) = decide(bin)
+        var reason = reason0
 
-        if (preferLocal(bin) && local != null && localPermitted()) {
-            health.onLocalStarted()
-            val res = runEngine(local, messages, isLocal = true)
-            route.add("local")
-            health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
-            risk.update(local.backend, local.model, bin, failed = !res.ok)
-            if (res.ok) {
-                state.onLocalSuccess()
-                return res.copy(route = route.toList(), tier = "local")
-            }
-            state.onLocalFailure()
-            health.onOffloaded()
-            if (!config.enableInRequestFallback || remote == null) {
-                return res.copy(route = route.toList())
+        if (prefer && local != null) {
+            if (localPermitted()) {
+                health.onLocalStarted()
+                val res = runEngine(local, messages, isLocal = true)
+                route.add("local")
+                health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
+                risk.update(local.backend, local.model, bin, failed = !res.ok)
+
+                if (res.ok) {
+                    state.onLocalSuccess()
+                    return res.copy(route = route.toList(), tier = "local", reason = "local_ok", idempotencyKey = idempotencyKey)
+                }
+                state.onLocalFailure()
+                health.onOffloaded()
+                val localErr = res.error ?: "unknown"
+                if (!allowFallback || remote == null) {
+                    return res.copy(route = route.toList(), tier = "local",
+                        reason = noFallbackReason(localErr), idempotencyKey = idempotencyKey)
+                }
+                reason = "fell_back:$localErr"
+            } else {
+                reason = "local_held_out"
             }
         }
 
@@ -55,7 +84,8 @@ class FailureAwareController(
             val res = runEngine(remote, messages, isLocal = false)
             route.add("remote")
             health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
-            return res.copy(route = route.toList(), tier = "remote", fellBack = route.contains("local"))
+            return res.copy(route = route.toList(), tier = "remote",
+                fellBack = route.contains("local"), reason = reason, idempotencyKey = idempotencyKey)
         }
 
         if (local != null && !route.contains("local")) {
@@ -64,52 +94,73 @@ class FailureAwareController(
             route.add("local")
             risk.update(local.backend, local.model, bin, failed = !res.ok)
             health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
-            if (res.ok) state.onLocalSuccess() else state.onLocalFailure()
-            return res.copy(route = route.toList(), tier = "local")
+            val r: String
+            if (res.ok) {
+                state.onLocalSuccess(); r = "local_only"
+            } else {
+                state.onLocalFailure(); r = "local_failed:" + (res.error ?: "unknown")
+            }
+            return res.copy(route = route.toList(), tier = "local", reason = r, idempotencyKey = idempotencyKey)
         }
 
-        return GenerationResult(ok = false, error = "no_backend_available", route = route.toList())
+        return GenerationResult(ok = false, error = "no_backend_available",
+            route = route.toList(), reason = "no_backend", idempotencyKey = idempotencyKey)
     }
 
-    /** Streaming with first-token-commit fallback (SPEC.md section 7). */
-    fun stream(messages: List<Message>): Sequence<StreamChunk> = sequence {
+    /** Streaming with first-token-commit fallback + idempotency (SPEC.md section 7). */
+    fun stream(
+        messages: List<Message>,
+        idempotencyKey: String? = null,
+        safeToRetry: Boolean = true,
+    ): Sequence<StreamChunk> = sequence {
         val bin = Complexity.complexityBin(messages, shortMaxTokens, mediumMaxTokens)
         val route = ArrayList<String>()
         var triedLocal = false
+        val allowFallback = fallbackAllowed(safeToRetry, idempotencyKey)
+        val (prefer, reason0) = decide(bin)
+        var reason = reason0
 
-        if (preferLocal(bin) && local != null && localPermitted()) {
-            triedLocal = true
-            route.add("local")
-            health.onLocalStarted()
-            var emitted = 0
-            var preTokenError: String? = null
-            var midError: String? = null
-            try {
-                for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS)) {
-                    emitted += 1
-                    yield(StreamChunk(delta = delta, tier = "local", model = local.model))
+        if (prefer && local != null) {
+            if (localPermitted()) {
+                triedLocal = true
+                route.add("local")
+                health.onLocalStarted()
+                var emitted = 0
+                var preTokenError: String? = null
+                var midError: String? = null
+                try {
+                    for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS)) {
+                        emitted += 1
+                        yield(StreamChunk(delta = delta, tier = "local", model = local.model))
+                    }
+                } catch (e: BackendException) {
+                    if (emitted > 0) midError = e.code else preTokenError = e.code
                 }
-            } catch (e: BackendException) {
-                if (emitted > 0) midError = e.code else preTokenError = e.code
-            }
 
-            if (emitted > 0) {
-                val ok = midError == null
-                risk.update(local.backend, local.model, bin, failed = !ok)
-                health.recordResult(ok, midError, 0.0, null)
-                if (ok) state.onLocalSuccess() else state.onLocalFailure()
-                yield(StreamChunk(done = true, error = midError, meta = meta("local", route, false, emitted)))
-                return@sequence
-            }
+                if (emitted > 0) {
+                    val ok = midError == null
+                    risk.update(local.backend, local.model, bin, failed = !ok)
+                    health.recordResult(ok, midError, 0.0, null)
+                    if (ok) state.onLocalSuccess() else state.onLocalFailure()
+                    val r = if (ok) "local_ok" else "local_committed_failed:" + (midError ?: "unknown")
+                    yield(StreamChunk(done = true, error = midError,
+                        meta = meta("local", route, false, emitted, r, idempotencyKey)))
+                    return@sequence
+                }
 
-            val code = preTokenError ?: "empty"
-            risk.update(local.backend, local.model, bin, failed = true)
-            health.recordResult(false, code, 0.0, null)
-            state.onLocalFailure()
-            health.onOffloaded()
-            if (!config.enableInRequestFallback || remote == null) {
-                yield(StreamChunk(done = true, error = code, meta = meta("local", route, false, 0)))
-                return@sequence
+                val code = preTokenError ?: "empty"
+                risk.update(local.backend, local.model, bin, failed = true)
+                health.recordResult(false, code, 0.0, null)
+                state.onLocalFailure()
+                health.onOffloaded()
+                if (!allowFallback || remote == null) {
+                    yield(StreamChunk(done = true, error = code,
+                        meta = meta("local", route, false, 0, noFallbackReason(code), idempotencyKey)))
+                    return@sequence
+                }
+                reason = "fell_back:$code"
+            } else {
+                reason = "local_held_out"
             }
         }
 
@@ -126,7 +177,8 @@ class FailureAwareController(
                 err = e.code
             }
             health.recordResult(err == null, err, 0.0, null)
-            yield(StreamChunk(done = true, error = err, meta = meta("remote", route, triedLocal, n)))
+            yield(StreamChunk(done = true, error = err,
+                meta = meta("remote", route, triedLocal, n, reason, idempotencyKey)))
             return@sequence
         }
 
@@ -144,12 +196,19 @@ class FailureAwareController(
             }
             val ok = err == null && n > 0
             risk.update(local.backend, local.model, bin, failed = !ok)
-            if (ok) state.onLocalSuccess() else state.onLocalFailure()
-            yield(StreamChunk(done = true, error = err ?: if (ok) null else "empty", meta = meta("local", route, false, n)))
+            val r: String
+            if (ok) {
+                state.onLocalSuccess(); r = "local_only"
+            } else {
+                state.onLocalFailure(); r = "local_failed:" + (err ?: "empty")
+            }
+            yield(StreamChunk(done = true, error = if (err != null) err else (if (ok) null else "empty"),
+                meta = meta("local", route, false, n, r, idempotencyKey)))
             return@sequence
         }
 
-        yield(StreamChunk(done = true, error = "no_backend_available", meta = meta("", route, false, 0)))
+        yield(StreamChunk(done = true, error = "no_backend_available",
+            meta = meta("", route, false, 0, "no_backend", idempotencyKey)))
     }
 
     private fun runEngine(engine: Engine, messages: List<Message>, isLocal: Boolean): GenerationResult {
@@ -180,26 +239,33 @@ class FailureAwareController(
         }
     }
 
-    /** Public for conformance testing. See SPEC.md section 6. */
-    fun preferLocal(bin: Int): Boolean {
-        if (config.forceRemote) return false
-        if (config.forceLocal) return true
-        if (local == null) return false
-        if (remote == null) return true
+    /** Up-front tier decision + a structured reason. See SPEC.md section 6. */
+    fun decide(bin: Int): Pair<Boolean, String> {
+        if (config.forceRemote) return false to "forced_remote"
+        if (config.forceLocal) return true to "forced_local"
+        if (local == null) return false to "no_local_backend"
+        if (remote == null) return true to "local_only"
         if (config.enableRuntimeHealthGating) {
             val pfail = risk.prFail(local.backend, local.model, bin)
             state.onDecision(pfail)
-            if (pfail >= config.riskPreferRemote) return false
+            if (pfail >= config.riskPreferRemote) return false to "risk_gate"
         }
-        return true
+        return true to "local_first"
     }
+
+    /** Kept for conformance-vector compatibility; see decide(). */
+    fun preferLocal(bin: Int): Boolean = decide(bin).first
 
     private fun localPermitted(): Boolean =
         if (!config.enableRecovery) true else state.localAllowed()
 
-    private fun meta(tier: String, route: List<String>, fellBack: Boolean, n: Int): Map<String, Any?> =
+    private fun meta(
+        tier: String, route: List<String>, fellBack: Boolean, n: Int,
+        reason: String, idempotencyKey: String?,
+    ): Map<String, Any?> =
         mapOf(
             "tier" to tier, "route" to route.toList(), "fell_back" to fellBack,
             "completion_tokens" to n, "state" to state.state.name,
+            "reason" to reason, "idempotency_key" to idempotencyKey,
         )
 }

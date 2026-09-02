@@ -103,6 +103,7 @@ class MlcEngine(
 
         val start = System.nanoTime()
         val stallMs = ((stallTimeoutS ?: timeoutS) * 1000).toLong()
+        var emitted = 0
         try {
             while (true) {
                 if ((System.nanoTime() - start) / 1e9 > timeoutS) {
@@ -112,9 +113,11 @@ class MlcEngine(
                 when (val item = queue.poll(stallMs, TimeUnit.MILLISECONDS)) {
                     null -> {
                         cancelled.set(true)
-                        throw BackendException("stall")   // token-rate collapse
+                        // 0 tokens -> first token never came (prefill/TTFT timeout);
+                        // otherwise tokens stopped mid-stream (inter-token stall).
+                        throw BackendException(if (emitted == 0) "prefill_timeout" else "stall")
                     }
-                    is Item.Token -> yield(item.text)
+                    is Item.Token -> { emitted += 1; yield(item.text) }
                     Item.Done -> return@sequence
                     is Item.Error -> throw BackendException(item.code)
                 }

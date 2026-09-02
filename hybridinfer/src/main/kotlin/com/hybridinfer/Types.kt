@@ -17,6 +17,8 @@ data class GenerationResult(
     val completionTokens: Int = 0,
     val fellBack: Boolean = false,
     val route: List<String> = emptyList(),
+    val reason: String = "",              // structured routing reason (see controller)
+    val idempotencyKey: String? = null,   // echoed back if the caller supplied one
 )
 
 /** One event from FailureAwareController.stream(). */

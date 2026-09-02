@@ -74,10 +74,13 @@ object Conformance {
             val name = case.get("name").asString
             val clock = doubleArrayOf(0.0)
             val sm = SafetyStateMachine(
-                sp.get("caution_pfail").asDouble,
-                sp.get("unsafe_failures").asInt,
-                sp.get("recovery_cooldown_s").asDouble,
-            ) { clock[0] }
+                cautionPfail = sp.get("caution_pfail").asDouble,
+                unsafeFailures = sp.get("unsafe_failures").asInt,
+                recoveryCooldownS = sp.get("recovery_cooldown_s").asDouble,
+                recoveryBackoff = sp.get("recovery_backoff").asDouble,
+                recoveryCooldownMaxS = sp.get("recovery_cooldown_max_s").asDouble,
+                clock = { clock[0] },
+            )
             for (sEl in case.getAsJsonArray("steps")) {
                 val step = sEl.asJsonObject
                 if (step.has("now")) clock[0] = step.get("now").asDouble
