@@ -3,7 +3,7 @@ package com.hybridinfer
 /** Feature flags mirror the research A0-A3 ablation arms. See SPEC.md section 8. */
 data class ControllerConfig(
     val localTimeoutS: Double = 120.0,
-    val localStallTimeoutS: Double = 20.0,
+    val localStallTimeoutS: Double = 20.0,   // bootstrap stall/prefill timeout (see adaptiveStall)
     val remoteTimeoutS: Double = 120.0,
     val riskPreferRemote: Double = 0.6,
     val enableRuntimeHealthGating: Boolean = true,
@@ -11,6 +11,12 @@ data class ControllerConfig(
     val enableRecovery: Boolean = true,
     val forceLocal: Boolean = false,
     val forceRemote: Boolean = false,
+    // adaptive stall detection: calibrate the watchdog off the device's own cadence
+    val adaptiveStall: Boolean = true,
+    val stallK: Double = 8.0,                 // stall timeout = k x learned inter-token gap
+    val prefillK: Double = 4.0,               // prefill timeout = k x learned TTFT
+    val stallFloorS: Double = 2.0,
+    val prefillFloorS: Double = 3.0,
 )
 
 /**
@@ -31,12 +37,55 @@ class FailureAwareController(
     val risk: RiskProfile = RiskProfile(),
     private val health: RuntimeHealthMonitor = RuntimeHealthMonitor(),
     val state: SafetyStateMachine = SafetyStateMachine(),
+    val latency: LatencyProfile = LatencyProfile(),
     private val shortMaxTokens: Int = 128,
     private val mediumMaxTokens: Int = 512,
 ) {
 
     private fun fallbackAllowed(safeToRetry: Boolean, key: String?): Boolean =
         config.enableInRequestFallback && (safeToRetry || key != null)
+
+    /** (stall, prefill) timeouts for a local attempt in this bin. With adaptiveStall
+     *  on, both derive from the device's own learned cadence (falling back to
+     *  localStallTimeoutS until enough samples); localTimeoutS is the hard ceiling. */
+    private fun localTimeouts(bin: Int): Pair<Double, Double> {
+        val l = local ?: return config.localStallTimeoutS to config.localStallTimeoutS
+        if (!config.adaptiveStall) return config.localStallTimeoutS to config.localStallTimeoutS
+        val stall = latency.stallTimeoutS(
+            l.backend, l.model, bin, config.localStallTimeoutS, config.localTimeoutS,
+            config.stallK, config.stallFloorS,
+        )
+        val prefill = latency.prefillTimeoutS(
+            l.backend, l.model, bin, config.localStallTimeoutS, config.localTimeoutS,
+            config.prefillK, config.prefillFloorS,
+        )
+        return stall to prefill
+    }
+
+    /** Fold a successful local run's measured cadence into the latency baseline. */
+    private fun observeResult(res: GenerationResult, bin: Int) {
+        val l = local ?: return
+        if (!res.ok || res.ttftMs == null) return
+        var gap: Double? = null
+        if (res.completionTokens > 1) {
+            val g = (res.latencyMs - res.ttftMs) / (res.completionTokens - 1)
+            gap = if (g >= 0.0) g else null
+        }
+        latency.observe(l.backend, l.model, bin, res.ttftMs, gap)
+    }
+
+    /** Fold a successful local *stream's* measured cadence into the baseline. */
+    private fun observeStream(bin: Int, startNs: Long, firstNs: Long, lastNs: Long, emitted: Int) {
+        val l = local ?: return
+        if (firstNs < 0L) return
+        val ttftMs = (firstNs - startNs) / 1e6
+        var gap: Double? = null
+        if (emitted > 1) {
+            val g = (lastNs - firstNs) / 1e6 / (emitted - 1)
+            gap = if (g >= 0.0) g else null
+        }
+        latency.observe(l.backend, l.model, bin, ttftMs, gap)
+    }
 
     private fun noFallbackReason(localErr: String): String = when {
         remote == null -> "local_failed:$localErr"
@@ -59,12 +108,15 @@ class FailureAwareController(
         if (prefer && local != null) {
             if (localPermitted()) {
                 health.onLocalStarted()
-                val res = runEngine(local, messages, isLocal = true, params = params)
+                val (stallTo, prefillTo) = localTimeouts(bin)
+                val res = runEngine(local, messages, isLocal = true, params = params,
+                    stallTimeoutS = stallTo, prefillTimeoutS = prefillTo)
                 route.add("local")
                 health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
                 risk.update(local.backend, local.model, bin, failed = !res.ok)
 
                 if (res.ok) {
+                    observeResult(res, bin)
                     state.onLocalSuccess()
                     return res.copy(route = route.toList(), tier = "local", reason = "local_ok", idempotencyKey = idempotencyKey)
                 }
@@ -91,12 +143,15 @@ class FailureAwareController(
 
         if (local != null && !route.contains("local")) {
             health.onLocalStarted()
-            val res = runEngine(local, messages, isLocal = true, params = params)
+            val (stallTo, prefillTo) = localTimeouts(bin)
+            val res = runEngine(local, messages, isLocal = true, params = params,
+                stallTimeoutS = stallTo, prefillTimeoutS = prefillTo)
             route.add("local")
             risk.update(local.backend, local.model, bin, failed = !res.ok)
             health.recordResult(res.ok, res.error, res.latencyMs, res.ttftMs)
             val r: String
             if (res.ok) {
+                observeResult(res, bin)
                 state.onLocalSuccess(); r = "local_only"
             } else {
                 state.onLocalFailure(); r = "local_failed:" + (res.error ?: "unknown")
@@ -130,8 +185,15 @@ class FailureAwareController(
                 var emitted = 0
                 var preTokenError: String? = null
                 var midError: String? = null
+                val (stallTo, prefillTo) = localTimeouts(bin)
+                val startNs = System.nanoTime()
+                var firstNs = -1L
+                var lastNs = startNs
                 try {
-                    for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS, params)) {
+                    for (delta in local.stream(messages, config.localTimeoutS, stallTo, prefillTo, params)) {
+                        val now = System.nanoTime()
+                        if (firstNs < 0L) firstNs = now
+                        lastNs = now
                         emitted += 1
                         yield(StreamChunk(delta = delta, tier = "local", model = local.model))
                     }
@@ -141,6 +203,7 @@ class FailureAwareController(
 
                 if (emitted > 0) {
                     val ok = midError == null
+                    if (ok) observeStream(bin, startNs, firstNs, lastNs, emitted)
                     risk.update(local.backend, local.model, bin, failed = !ok)
                     health.recordResult(ok, midError, 0.0, null)
                     if (ok) state.onLocalSuccess() else state.onLocalFailure()
@@ -171,7 +234,7 @@ class FailureAwareController(
             var n = 0
             var err: String? = null
             try {
-                for (delta in remote.stream(messages, config.remoteTimeoutS, null, params)) {
+                for (delta in remote.stream(messages, config.remoteTimeoutS, null, null, params)) {
                     n += 1
                     yield(StreamChunk(delta = delta, tier = "remote", model = remote.model))
                 }
@@ -188,8 +251,15 @@ class FailureAwareController(
             route.add("local")
             var n = 0
             var err: String? = null
+            val (stallTo, prefillTo) = localTimeouts(bin)
+            val startNs = System.nanoTime()
+            var firstNs = -1L
+            var lastNs = startNs
             try {
-                for (delta in local.stream(messages, config.localTimeoutS, config.localStallTimeoutS, params)) {
+                for (delta in local.stream(messages, config.localTimeoutS, stallTo, prefillTo, params)) {
+                    val now = System.nanoTime()
+                    if (firstNs < 0L) firstNs = now
+                    lastNs = now
                     n += 1
                     yield(StreamChunk(delta = delta, tier = "local", model = local.model))
                 }
@@ -197,6 +267,7 @@ class FailureAwareController(
                 err = e.code
             }
             val ok = err == null && n > 0
+            if (ok) observeStream(bin, startNs, firstNs, lastNs, n)
             risk.update(local.backend, local.model, bin, failed = !ok)
             val r: String
             if (ok) {
@@ -215,15 +286,16 @@ class FailureAwareController(
 
     private fun runEngine(
         engine: Engine, messages: List<Message>, isLocal: Boolean, params: Map<String, Any?>?,
+        stallTimeoutS: Double? = null, prefillTimeoutS: Double? = null,
     ): GenerationResult {
         val start = System.nanoTime()
         var ttft: Double? = null
         val sb = StringBuilder()
         var n = 0
         val timeout = if (isLocal) config.localTimeoutS else config.remoteTimeoutS
-        val stall = if (isLocal) config.localStallTimeoutS else null
+        val stall = stallTimeoutS ?: (if (isLocal) config.localStallTimeoutS else null)
         return try {
-            for (delta in engine.stream(messages, timeout, stall, params)) {
+            for (delta in engine.stream(messages, timeout, stall, prefillTimeoutS, params)) {
                 if (ttft == null) ttft = (System.nanoTime() - start) / 1e6
                 n += 1
                 sb.append(delta)

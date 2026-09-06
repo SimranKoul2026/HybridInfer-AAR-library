@@ -51,8 +51,9 @@ interface Engine {
     fun stream(
         messages: List<Message>,
         timeoutS: Double,
-        stallTimeoutS: Double?,
-        params: Map<String, Any?>? = null,   // OpenAI-style generation params to forward
+        stallTimeoutS: Double?,               // inter-token gap that counts as a wedge (after 1st token)
+        prefillTimeoutS: Double? = null,      // separate budget for the FIRST token (prompt processing)
+        params: Map<String, Any?>? = null,    // OpenAI-style generation params to forward
     ): Sequence<String>
 
     fun available(): Boolean = true

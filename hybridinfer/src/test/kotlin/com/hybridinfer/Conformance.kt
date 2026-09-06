@@ -20,6 +20,7 @@ object Conformance {
             messages: List<Message>,
             timeoutS: Double,
             stallTimeoutS: Double?,
+            prefillTimeoutS: Double?,
             params: Map<String, Any?>?,
         ): Sequence<String> = emptySequence()
     }
@@ -31,6 +32,7 @@ object Conformance {
         checkRisk(root.getAsJsonObject("risk"), failures)
         checkState(root.getAsJsonObject("state"), failures)
         checkPreferLocal(root.getAsJsonObject("prefer_local"), failures)
+        checkLatency(root.getAsJsonObject("latency"), failures)
         return failures
     }
 
@@ -129,6 +131,40 @@ object Conformance {
             val got = ctrl.preferLocal(c.get("bin").asInt)
             val exp = c.get("expected_prefer_local").asBoolean
             if (got != exp) failures.add("prefer_local: got $got expected $exp for $c")
+        }
+    }
+
+    private fun checkLatency(lt: JsonObject, failures: MutableList<String>) {
+        val tol = lt.get("tolerance").asDouble
+        val p = lt.getAsJsonObject("params")
+        val q = lt.getAsJsonObject("query")
+        val alpha = p.get("alpha").asDouble
+        val minSamples = p.get("min_samples").asInt
+        for (el in lt.getAsJsonArray("cases")) {
+            val c = el.asJsonObject
+            val name = c.get("name").asString
+            val lp = LatencyProfile(alpha = alpha, minSamples = minSamples)
+            for (oEl in c.getAsJsonArray("observations")) {
+                val o = oEl.asJsonObject
+                val ttft = o.get("ttft_ms").asDouble
+                val gapEl = o.get("gap_ms")
+                val gap: Double? = if (gapEl == null || gapEl.isJsonNull) null else gapEl.asDouble
+                lp.observe("ollama", "m", 1, ttft, gap)
+            }
+            val stall = lp.stallTimeoutS(
+                "ollama", "m", 1, q.get("default_s").asDouble, q.get("ceiling_s").asDouble,
+                q.get("stall_k").asDouble, q.get("stall_floor_s").asDouble,
+            )
+            val prefill = lp.prefillTimeoutS(
+                "ollama", "m", 1, q.get("default_s").asDouble, q.get("ceiling_s").asDouble,
+                q.get("prefill_k").asDouble, q.get("prefill_floor_s").asDouble,
+            )
+            val expStall = c.get("expected_stall_s").asDouble
+            val expPrefill = c.get("expected_prefill_s").asDouble
+            if (Math.abs(stall - expStall) >= tol)
+                failures.add("latency[$name] stall: got $stall expected $expStall")
+            if (Math.abs(prefill - expPrefill) >= tol)
+                failures.add("latency[$name] prefill: got $prefill expected $expPrefill")
         }
     }
 }

@@ -23,6 +23,10 @@ routing + reliability brain.
   (mid-stream), plus a structured routing `reason` on every result.
 - **Parameter passthrough** (v0.2.1): generation params (`temperature`, `max_tokens`,
   `tools`, ...) passed to `complete`/`stream` are forwarded to the engines.
+- **Adaptive stall detection** (v0.3): the stall/prefill watchdog timeouts are
+  learned from the device's own first-token latency and token cadence per model,
+  instead of one fixed number for all hardware - a slow device gets headroom, a
+  fast one detects a real wedge sooner. Falls back to a fixed timeout until warmed.
 - **Optional thermal signal** (`ThermalSignal`) - the input a desktop can't have.
 
 ## Install
@@ -36,7 +40,7 @@ dependencyResolutionManagement {
 }
 // build.gradle.kts
 dependencies {
-    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.2.1")
+    implementation("com.github.SimranKoul2026:HybridInfer-AAR-library:v0.3.0")
 }
 ```
 
@@ -53,8 +57,12 @@ import com.hybridinfer.*
 class MlcEngine(override val model: String) : Engine {
     override val tier = "local"
     override val backend = "mlc"
-    override fun stream(messages: List<Message>, timeoutS: Double, stallTimeoutS: Double?): Sequence<String> = sequence {
+    override fun stream(
+        messages: List<Message>, timeoutS: Double,
+        stallTimeoutS: Double?, prefillTimeoutS: Double?, params: Map<String, Any?>?,
+    ): Sequence<String> = sequence {
         // ... stream tokens from MLCEngine; throw BackendException("stall") on a wedge.
+        // stallTimeoutS = inter-token budget, prefillTimeoutS = first-token budget (both adaptive).
     }
 }
 
@@ -101,7 +109,7 @@ Python repo's copy, and both test suites must pass it.
 - The pure-Kotlin core and `OpenAiEngine` are dependency-light (only gson) and
   JVM-unit-tested; the Android-specific `ThermalSignal` compiles under the Android
   SDK.
-- Published via JitPack (`v0.2.1`); not on Maven Central.
+- Published via JitPack (`v0.3.0`); not on Maven Central.
 
 ## License
 

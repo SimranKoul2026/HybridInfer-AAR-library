@@ -25,6 +25,9 @@ class HybridRouter(
     recoveryCooldownS: Double = 60.0,
     recoveryBackoff: Double = 2.0,
     recoveryCooldownMaxS: Double = 600.0,
+    latencyProfilePath: String? = null,
+    latencyEwmaAlpha: Double = 0.3,
+    latencyMinSamples: Int = 5,
 ) {
     val controller = FailureAwareController(
         local = local,
@@ -36,6 +39,7 @@ class HybridRouter(
             recoveryBackoff = recoveryBackoff,
             recoveryCooldownMaxS = recoveryCooldownMaxS,
         ),
+        latency = LatencyProfile(latencyProfilePath, latencyEwmaAlpha, latencyMinSamples),
         shortMaxTokens = shortMaxTokens,
         mediumMaxTokens = mediumMaxTokens,
     )

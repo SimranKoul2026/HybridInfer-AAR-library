@@ -76,6 +76,7 @@ class MlcEngine(
         messages: List<Message>,
         timeoutS: Double,
         stallTimeoutS: Double?,
+        prefillTimeoutS: Double?,     // separate budget for the FIRST token (prompt processing)
         params: Map<String, Any?>?,   // map temperature/max_tokens/... onto MLC's request if desired
     ): Sequence<String> = sequence {
         val queue = LinkedBlockingQueue<Item>()
@@ -104,6 +105,7 @@ class MlcEngine(
 
         val start = System.nanoTime()
         val stallMs = ((stallTimeoutS ?: timeoutS) * 1000).toLong()
+        val prefillMs = ((prefillTimeoutS ?: stallTimeoutS ?: timeoutS) * 1000).toLong()
         var emitted = 0
         try {
             while (true) {
@@ -111,7 +113,9 @@ class MlcEngine(
                     cancelled.set(true)
                     throw BackendException("timeout")
                 }
-                when (val item = queue.poll(stallMs, TimeUnit.MILLISECONDS)) {
+                // first token gets the prefill budget; later gaps get the stall budget
+                val pollMs = if (emitted == 0) prefillMs else stallMs
+                when (val item = queue.poll(pollMs, TimeUnit.MILLISECONDS)) {
                     null -> {
                         cancelled.set(true)
                         // 0 tokens -> first token never came (prefill/TTFT timeout);

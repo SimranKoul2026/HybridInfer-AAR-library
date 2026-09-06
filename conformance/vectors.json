@@ -93,5 +93,20 @@
       { "config": { "force_local": true, "enable_runtime_health_gating": true, "risk_prefer_remote": 0.5 }, "risk": { "bin": 2, "attempts": 0, "failures": 0 }, "bin": 2, "expected_prefer_local": true },
       { "config": { "enable_runtime_health_gating": false, "risk_prefer_remote": 0.5 }, "risk": { "bin": 2, "attempts": 0, "failures": 0 }, "bin": 2, "expected_prefer_local": true }
     ]
+  },
+  "latency": {
+    "_doc": "Adaptive stall detection (SPEC.md section 9). Build a LatencyProfile(alpha, min_samples); apply each observation in order via observe(ttft_ms, gap_ms) with gap_ms=null when <2 tokens; then query stall_timeout_s and prefill_timeout_s with `query`. backend='ollama' model='m' bin=1. EWMA: first value seeds, else new = alpha*x + (1-alpha)*old. Threshold = clamp(k * baseline_ms/1000, floor_s, ceiling_s), or default_s until count>=min_samples (or the baseline is unobserved). Compare within tolerance.",
+    "tolerance": 1e-9,
+    "params": { "alpha": 0.3, "min_samples": 3 },
+    "query": { "default_s": 20.0, "ceiling_s": 120.0, "stall_k": 8.0, "prefill_k": 4.0, "stall_floor_s": 2.0, "prefill_floor_s": 3.0 },
+    "cases": [
+      { "name": "bootstrap_below_min_samples", "observations": [ { "ttft_ms": 1000, "gap_ms": 500 }, { "ttft_ms": 1000, "gap_ms": 500 } ], "expected_stall_s": 20.0, "expected_prefill_s": 20.0 },
+      { "name": "adaptive_steady", "observations": [ { "ttft_ms": 1000, "gap_ms": 1000 }, { "ttft_ms": 1000, "gap_ms": 1000 }, { "ttft_ms": 1000, "gap_ms": 1000 } ], "expected_stall_s": 8.0, "expected_prefill_s": 4.0 },
+      { "name": "slow_device_more_headroom", "observations": [ { "ttft_ms": 8000, "gap_ms": 5000 }, { "ttft_ms": 8000, "gap_ms": 5000 }, { "ttft_ms": 8000, "gap_ms": 5000 } ], "expected_stall_s": 40.0, "expected_prefill_s": 32.0 },
+      { "name": "fast_device_floor", "observations": [ { "ttft_ms": 100, "gap_ms": 50 }, { "ttft_ms": 100, "gap_ms": 50 }, { "ttft_ms": 100, "gap_ms": 50 } ], "expected_stall_s": 2.0, "expected_prefill_s": 3.0 },
+      { "name": "ceiling_caps", "observations": [ { "ttft_ms": 50000, "gap_ms": 40000 }, { "ttft_ms": 50000, "gap_ms": 40000 }, { "ttft_ms": 50000, "gap_ms": 40000 } ], "expected_stall_s": 120.0, "expected_prefill_s": 120.0 },
+      { "name": "ewma_tracks_recent", "observations": [ { "ttft_ms": 1000, "gap_ms": 1000 }, { "ttft_ms": 1000, "gap_ms": 2000 }, { "ttft_ms": 1000, "gap_ms": 2000 } ], "expected_stall_s": 12.08, "expected_prefill_s": 4.0 },
+      { "name": "gap_null_stall_default_prefill_adapts", "observations": [ { "ttft_ms": 2000, "gap_ms": null }, { "ttft_ms": 2000, "gap_ms": null }, { "ttft_ms": 2000, "gap_ms": null } ], "expected_stall_s": 20.0, "expected_prefill_s": 8.0 }
+    ]
   }
 }

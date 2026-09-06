@@ -199,9 +199,11 @@ routing:
   risk_prefer_remote, enable_runtime_health_gating,
   enable_in_request_fallback, enable_recovery,
   recovery_cooldown_s, recovery_backoff, recovery_cooldown_max_s,
+  adaptive_stall, latency_ewma_alpha, latency_min_samples,
+  stall_k, prefill_k, stall_floor_s, prefill_floor_s,
   force_local, force_remote
 complexity: short_max_tokens, medium_max_tokens
-risk_profile_path
+risk_profile_path, latency_profile_path
 ```
 
 The feature flags reproduce the research A0-A3 ablation arms
@@ -210,7 +212,41 @@ on = full).
 
 ---
 
-## 9. Platform differences (allowed to differ)
+## 9. Adaptive stall detection
+
+The stall/prefill watchdog timeouts are calibrated to the device's own measured
+cadence rather than one absolute value for all hardware: a value tuned on a fast
+device trips early on a slower one and sits there far too long on a fast one that
+has genuinely wedged.
+
+**LatencyProfile** — keyed per `(backend, model, length-bin)`, exactly like the
+risk profile; persisted; updated only on SUCCESSFUL local runs.
+
+- `observe(backend, model, bin, ttft_ms, gap_ms)` — EWMA update of a
+  time-to-first-token baseline and an inter-token gap baseline. `gap_ms` is null
+  when fewer than two tokens were produced (the TTFT baseline still updates). EWMA:
+  the first value seeds the baseline; thereafter `new = alpha*x + (1-alpha)*old`.
+- Thresholds, computed per local attempt:
+  - `stall_timeout   = clamp(stall_k   * gap_baseline_ms  / 1000, stall_floor_s,   ceiling_s)`
+  - `prefill_timeout = clamp(prefill_k * ttft_baseline_ms / 1000, prefill_floor_s, ceiling_s)`
+  - `ceiling_s` is the overall `local_timeout_s`.
+  - Until `min_samples` successful runs (or while the relevant baseline is
+    unobserved), a threshold falls back to the bootstrap default
+    `local_stall_timeout_s`.
+
+The two deadlines are applied separately by the local engine: `prefill_timeout`
+governs the wait for the FIRST token (prompt processing), `stall_timeout` each
+inter-token gap after it. A backend that cannot separate the phases may treat
+`prefill_timeout` as an alias for `stall_timeout`. The miss code is
+`prefill_timeout` (no token yet) or `stall` (tokens stopped) — see section 7. Set
+`adaptive_stall: false` to pin the fixed `local_stall_timeout_s`.
+
+Defaults: `alpha = 0.3`, `min_samples = 5`, `stall_k = 8.0`, `prefill_k = 4.0`,
+`stall_floor_s = 2.0`, `prefill_floor_s = 3.0`.
+
+---
+
+## 10. Platform differences (allowed to differ)
 
 | Aspect | Python (desktop) | Kotlin (Android) |
 |---|---|---|
@@ -221,14 +257,14 @@ on = full).
 | Packaging | PyPI wheel | Maven/AAR |
 | Surface | proxy server + CLI + lib | library (host builds UI) |
 
-Everything in sections 2-8 MUST match regardless of platform.
+Everything in sections 2-9 MUST match regardless of platform.
 
 ---
 
-## 10. Conformance
+## 11. Conformance
 
 `conformance/vectors.json` is the shared, language-neutral test fixture. It is
 byte-identical in both repos and covers: complexity binning, risk `pr_fail`,
-safety-state transitions, and `prefer_local`. Both the Python and Kotlin test
-suites load it and MUST pass every case. Changing behavior means changing the
-vectors here first, then both implementations.
+safety-state transitions, `prefer_local`, and adaptive-stall latency thresholds.
+Both the Python and Kotlin test suites load it and MUST pass every case. Changing
+behavior means changing the vectors here first, then both implementations.

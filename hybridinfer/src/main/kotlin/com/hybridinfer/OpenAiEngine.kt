@@ -26,6 +26,7 @@ class OpenAiEngine(
         messages: List<Message>,
         timeoutS: Double,
         stallTimeoutS: Double?,
+        prefillTimeoutS: Double?,   // accepted for interface parity (remote isn't device-side)
         params: Map<String, Any?>?,
     ): Sequence<String> = sequence {
         val url = URL(baseUrl.trimEnd('/') + "/chat/completions")
