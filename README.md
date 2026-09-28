@@ -111,6 +111,15 @@ Python repo's copy, and both test suites must pass it.
   SDK.
 - Published via JitPack (`v0.3.0`); not on Maven Central.
 
+## Research paper
+
+This library is the Android twin of the HybridInfer research system. If you use
+it in academic work, please cite the paper:
+
+Simran Koul. *HybridInfer: Thermal-Aware Reinforcement-Learning Tier Routing for
+On-Device, Edge, and Cloud LLM Inference.* arXiv:2609.30270, 2026.
+[https://arxiv.org/abs/2609.30270](https://arxiv.org/abs/2609.30270)
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
